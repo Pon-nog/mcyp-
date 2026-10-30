@@ -1,68 +1,62 @@
 name: Miniso Auto Tasks
-
-on:
-  # 每周四晚上自动运行 (北京时间周四 20:00 = UTC 12:00)
-  schedule:
-    - cron: '0 12 * * 4'
-  # 允许手动触发
-  workflow_dispatch:name: Miniso Auto Tasks
-
 on:
   # 每周四晚上自动运行 (北京时间周四 20:00 = UTC 12:00)
   schedule:
     - cron: '0 12 * * 4'
   # 允许手动触发
   workflow_dispatch:
-
 jobs:
   run-tasks:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-      
+
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
-        
-    - name: Get runner public IP & add to 51daili whitelist
+
+    - name: Get runner public IP & manage 51daili whitelist
       id: whitelist
       env:
         PROXY_API_URL: ${{ secrets.PROXY_API_URL }}
       run: |
-        # 获取当前Runner的公网IP
-        MY_IP=$(curl -s ifconfig.me)
-        echo "Current runner IP: $MY_IP"
-        
-        # 从PROXY_API_URL中提取appkey参数 (51代理URL格式: ...&appkey=xxx&...)
-        APPKEY=$(echo "$PROXY_API_URL" | grep -o 'appkey=[^&]*' | cut -d= -f2)
-        
-        if [ -n "$APPKEY" ] && [ -n "$MY_IP" ]; then
-          echo "Adding $MY_IP to 51daili whitelist..."
-          # 调用51代理白名单API
-          RESULT=$(curl -s "http://aapi.51daili.com/whiteIP?op=add&appkey=${APPKEY}&whiteip=${MY_IP}")
-          echo "Whitelist API response: $RESULT"
-          # 等待几秒确保白名单生效
-          sleep 5
-        else
-          echo "Warning: Could not extract appkey or IP, skipping whitelist"
+        # 多备用站点获取公网IP，防止ifconfig.me访问失败
+        MY_IP=""
+        MY_IP=$(curl -s --connect-timeout 8 ifconfig.me) || MY_IP=""
+        if [ -z "$MY_IP" ];then
+          MY_IP=$(curl -s --connect-timeout 8 icanhazip.com) || MY_IP=""
         fi
-        
+        echo "Current runner IP: $MY_IP"
+
+        # 从PROXY_API_URL提取appkey
+        APPKEY=$(echo "$PROXY_API_URL" | grep -o 'appkey=[^&]*' | cut -d= -f2)
+
+        if [ -n "$APPKEY" ] && [ -n "$MY_IP" ]; then
+          echo "Delete old ip from whitelist first"
+          curl -s --connect-timeout 10 "http://aapi.51daili.com/whiteIP?op=del&appkey=${APPKEY}&whiteip=${MY_IP}"
+          sleep 2
+
+          echo "Adding $MY_IP to 51daili whitelist..."
+          RESULT=$(curl -s --connect-timeout 10 "http://aapi.51daili.com/whiteIP?op=add&appkey=${APPKEY}&whiteip=${MY_IP}")
+          echo "Whitelist API response: $RESULT"
+          # 等待白名单生效
+          sleep 6
+        else
+          echo "Warning: Could not extract appkey or IP, skipping whitelist operate"
+        fi
+
     - name: Get proxy IP from API
       id: get_proxy
       env:
         PROXY_API_URL: ${{ secrets.PROXY_API_URL }}
       run: |
-        # 51代理API示例 (完整URL已包含所有参数):
-        # http://bapi.51daili.com/getapi2?packid=2&time=13&qty=10&port=1&format=txt&...
-        
-        # 如果API返回TXT格式(一行一个ip:port)，直接curl获取并取第一行
         if [ -n "$PROXY_API_URL" ]; then
           echo "Getting proxy from API..."
-          curl -s "$PROXY_API_URL" > proxy.txt
+          curl -s --connect-timeout 15 --max-time 20 --retry 2 "$PROXY_API_URL" > proxy.txt
           proxy_ip=$(head -1 proxy.txt)
           if [ -n "$proxy_ip" ]; then
             echo "proxy=http://${proxy_ip}" >> $GITHUB_OUTPUT
@@ -71,100 +65,27 @@ jobs:
             echo "Failed to get proxy, will use direct connection"
           fi
         fi
-        
+
     - name: Run Miniso Script
       env:
         # ===== 账号配置 =====
         MINISO_RAW_HEADERS: ${{ secrets.MINISO_RAW_HEADERS }}
         MINISO_RAW_HEADERS_1: ${{ secrets.MINISO_RAW_HEADERS_1 }}
         MINISO_RAW_HEADERS_2: ${{ secrets.MINISO_RAW_HEADERS_2 }}
-        
+
         # ===== 代理配置 =====
-        # 方式A: 代理API自动获取 (使用51代理等国内IP平台)
         PROXY_API_URL: ${{ secrets.PROXY_API_URL }}
-        
-        # 方式B: 固定代理IP (测试用)
-        # HTTP_PROXY: http://ip:port
-        # HTTPS_PROXY: http://ip:port
-        
-        # 方式C: 使用上一步curl获取的代理 (启用)
         HTTP_PROXY: ${{ steps.get_proxy.outputs.proxy }}
         HTTPS_PROXY: ${{ steps.get_proxy.outputs.proxy }}
-        
       run: |
         echo "Starting Miniso auto tasks..."
         if [ -n "$HTTP_PROXY" ]; then
           echo "Using proxy: $HTTP_PROXY"
+        else
+          echo "No proxy obtained, run in direct‑connect mode"
         fi
         python mcyp_browse.py
-        
-    - name: Upload logs
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: miniso-logs-${{ github.run_number }}
-        path: |
-          *.log
-        retention-days: 7
 
-jobs:
-  run-tasks:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
-        
-    - name: Get proxy IP from API
-      id: get_proxy
-      env:
-        PROXY_API_URL: ${{ secrets.PROXY_API_URL }}
-      run: |
-        # 51代理API示例 (完整URL已包含所有参数):
-        # http://bapi.51daili.com/getapi2?packid=2&time=13&qty=10&port=1&format=txt&...
-        
-        # 如果API返回TXT格式(一行一个ip:port)，直接curl获取并取第一行
-        if [ -n "$PROXY_API_URL" ]; then
-          echo "Getting proxy from API..."
-          curl -s "$PROXY_API_URL" > proxy.txt
-          proxy_ip=$(head -1 proxy.txt)
-          if [ -n "$proxy_ip" ]; then
-            echo "proxy=http://${proxy_ip}" >> $GITHUB_OUTPUT
-            echo "Got proxy: ${proxy_ip}"
-          else
-            echo "Failed to get proxy, will use direct connection"
-          fi
-        fi
-        
-    - name: Run Miniso Script
-      env:
-        # ===== 账号配置 =====
-        MINISO_RAW_HEADERS: ${{ secrets.MINISO_RAW_HEADERS }}
-        MINISO_RAW_HEADERS_1: ${{ secrets.MINISO_RAW_HEADERS_1 }}
-        MINISO_RAW_HEADERS_2: ${{ secrets.MINISO_RAW_HEADERS_2 }}
-        
-        # ===== 代理配置 =====
-        # 方式A: 代理API自动获取 (使用51代理等国内IP平台)
-        PROXY_API_URL: ${{ secrets.PROXY_API_URL }}
-        
-        # 方式B: 固定代理IP (测试用)
-        # HTTP_PROXY: http://ip:port
-        # HTTPS_PROXY: http://ip:port
-        
-        # 方式C: 使用上一步curl获取的代理 (备用)
-        # HTTP_PROXY: ${{ steps.get_proxy.outputs.proxy }}
-        # HTTPS_PROXY: ${{ steps.get_proxy.outputs.proxy }}
-        
-      run: |
-        echo "Starting Miniso auto tasks..."
-        python mcyp_browse.py
-        
     - name: Upload logs
       if: always()
       uses: actions/upload-artifact@v4
