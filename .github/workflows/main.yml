@@ -5,7 +5,200 @@ on:
     - cron: '0 12 * * 4'
   # 允许手动触发
   workflow_dispatch:
+jobs:name: Miniso Auto Tasks
+
+on:
+  # 每周四晚上自动运行 (北京时间周四 20:00 = UTC 12:00)
+  schedule:
+    - cron: '0 12 * * 4'
+  # 允许手动触发
+  workflow_dispatch:
+
 jobs:
+  run-tasks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Get runner public IP & manage 51daili whitelist
+      id: whitelist
+      env:
+        PROXY_API_URL: ${{ secrets.PROXY_API_URL }}
+      run: |
+        echo "=== 步骤: 获取公网IP并添加到51代理白名单 ==="
+        
+        # ========== 获取公网IP ==========
+        MY_IP=""
+        for url in "ifconfig.me" "icanhazip.com" "api.ipify.org" "ip.sb"; do
+          MY_IP=$(curl -s --connect-timeout 8 "$url" 2>/dev/null) || true
+          # 验证IP格式
+          if [ -n "$MY_IP" ] && echo "$MY_IP" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "✓ 从 $url 获取到IP: $MY_IP"
+            break
+          fi
+          echo "✗ $url 获取失败或返回无效IP"
+          MY_IP=""
+        done
+        
+        if [ -z "$MY_IP" ]; then
+          echo "⚠ 警告: 无法获取公网IP，跳过白名单操作"
+          exit 0
+        fi
+        
+        echo "当前Runner公网IP: $MY_IP"
+        
+        # ========== 检查代理API URL是否设置 ==========
+        if [ -z "$PROXY_API_URL" ]; then
+          echo "⚠ 警告: PROXY_API_URL 未设置，无法添加白名单"
+          exit 0
+        fi
+        
+        # 显示URL结构（隐藏敏感信息）
+        echo "代理API URL结构: ${PROXY_API_URL//\&accessPassword=*/\&accessPassword=***}"
+        
+        # ========== 从URL提取认证参数 ==========
+        # 支持多种51代理URL格式：
+        # 格式1: ...&appkey=xxx&...
+        # 格式2: ...&accessName=xxx&accessPassword=yyy&...
+        # 格式3: ...&skey=xxx&...
+        # 格式4: URL编码的 & 如 %26accessName%3Dxxx
+        
+        APPKEY=""
+        ACCESS_NAME=""
+        ACCESS_PASSWORD=""
+        SKEY=""
+        
+        # 先对URL进行解码（处理 %26 → & 等URL编码）
+        DECODED_URL=$(echo "$PROXY_API_URL" | python3 -c "import sys,urllib.parse; print(urllib.parse.unquote(sys.stdin.read().strip()))" 2>/dev/null || echo "$PROXY_API_URL")
+        echo "解码后URL检查..."
+        
+        # 提取各种可能的认证参数
+        APPKEY=$(echo "$DECODED_URL" | grep -oE '(appkey|appKey)=[^&]+' | head -1 | cut -d= -f2)
+        ACCESS_NAME=$(echo "$DECODED_URL" | grep -oE '(accessName|accessname|user)=[^&]+' | head -1 | cut -d= -f2)
+        ACCESS_PASSWORD=$(echo "$DECODED_URL" | grep -oE '(accessPassword|accesspassword|pass|password)=[^&]+' | head -1 | cut -d= -f2)
+        SKEY=$(echo "$DECODED_URL" | grep -oE '(skey|SKEY|key)=[^&]+' | head -1 | cut -d= -f2)
+        
+        echo "提取结果:"
+        echo "  appkey=${APPKEY:-<未找到>}"
+        echo "  accessName=${ACCESS_NAME:-<未找到>}"
+        echo "  accessPassword=${ACCESS_PASSWORD:+<已找到>}"
+        echo "  skey=${SKEY:-<未找到>}"
+        
+        # ========== 调用白名单API ==========
+        WHITELIST_API="http://aapi.51daili.com/whiteIP"
+        RESULT=""
+        
+        if [ -n "$APPKEY" ]; then
+          echo "→ 使用appkey格式添加白名单..."
+          RESULT=$(curl -s --connect-timeout 10 "${WHITELIST_API}?op=add&appkey=${APPKEY}&whiteip=${MY_IP}" 2>&1)
+          
+        elif [ -n "$ACCESS_NAME" ] && [ -n "$ACCESS_PASSWORD" ]; then
+          echo "→ 使用accessName格式添加白名单..."
+          RESULT=$(curl -s --connect-timeout 10 "${WHITELIST_API}?op=add&accessName=${ACCESS_NAME}&accessPassword=${ACCESS_PASSWORD}&whiteip=${MY_IP}" 2>&1)
+          
+        elif [ -n "$SKEY" ]; then
+          echo "→ 使用skey格式添加白名单..."
+          RESULT=$(curl -s --connect-timeout 10 "${WHITELIST_API}?op=add&skey=${SKEY}&whiteip=${MY_IP}" 2>&1)
+          
+        else
+          echo "⚠ 警告: 无法从URL提取任何认证参数"
+          echo "  请检查PROXY_API_URL格式是否包含appkey/accessName/skey等参数"
+          exit 0
+        fi
+        
+        echo "白名单API响应: $RESULT"
+        
+        # 等待白名单生效
+        echo "等待5秒让白名单生效..."
+        sleep 5
+        
+        # 将IP保存供后续步骤使用（如果需要）
+        echo "runner_ip=$MY_IP" >> $GITHUB_OUTPUT
+
+    - name: Get proxy IP from API
+      id: get_proxy
+      env:
+        PROXY_API_URL: ${{ secrets.PROXY_API_URL }}
+      run: |
+        echo "=== 步骤: 从API获取代理IP ==="
+        
+        if [ -z "$PROXY_API_URL" ]; then
+          echo "⚠ 警告: PROXY_API_URL 未设置，跳过代理获取"
+          exit 0
+        fi
+        
+        # 尝试获取代理IP，最多重试3次
+        proxy_ip=""
+        for i in 1 2 3; do
+          echo "→ 第 $i 次尝试获取代理..."
+          
+          # 使用curl获取，增加错误处理
+          RESPONSE=$(curl -s --connect-timeout 15 --max-time 20 -w "\nHTTP_CODE:%{http_code}" "$PROXY_API_URL" 2>&1) || true
+          
+          # 分离响应体和HTTP状态码
+          HTTP_CODE=$(echo "$RESPONSE" | grep "HTTP_CODE:" | cut -d: -f2)
+          BODY=$(echo "$RESPONSE" | grep -v "HTTP_CODE:")
+          
+          echo "  HTTP状态码: ${HTTP_CODE:-未知}"
+          echo "  响应内容: ${BODY:-空}"
+          
+          # 检查响应是否包含IP:PORT格式
+          proxy_ip=$(echo "$BODY" | head -1 | tr -d '\r\n' | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+$')
+          
+          if [ -n "$proxy_ip" ]; then
+            echo "✓ 成功获取代理: $proxy_ip"
+            echo "proxy=http://${proxy_ip}" >> $GITHUB_OUTPUT
+            break
+          else
+            echo "✗ 未获取到有效代理IP，等待2秒后重试..."
+            sleep 2
+          fi
+        done
+        
+        if [ -z "$proxy_ip" ]; then
+          echo "⚠ 警告: 3次尝试后仍未获取到代理IP，将使用直连模式"
+          # 不设置proxy输出，让脚本使用直连
+        fi
+
+    - name: Run Miniso Script
+      env:
+        # ===== 账号配置 =====
+        MINISO_RAW_HEADERS: ${{ secrets.MINISO_RAW_HEADERS }}
+        MINISO_RAW_HEADERS_1: ${{ secrets.MINISO_RAW_HEADERS_1 }}
+        MINISO_RAW_HEADERS_2: ${{ secrets.MINISO_RAW_HEADERS_2 }}
+
+        # ===== 代理配置 =====
+        PROXY_API_URL: ${{ secrets.PROXY_API_URL }}
+        HTTP_PROXY: ${{ steps.get_proxy.outputs.proxy }}
+        HTTPS_PROXY: ${{ steps.get_proxy.outputs.proxy }}
+      run: |
+        echo "=== 步骤: 运行名创优品自动化脚本 ==="
+        
+        if [ -n "$HTTP_PROXY" ]; then
+          echo "✓ 使用代理: $HTTP_PROXY"
+        else
+          echo "⚠ 无代理，使用直连模式（可能无法访问国内接口）"
+        fi
+        
+        python mcyp_browse.py
+
+    - name: Upload logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: miniso-logs-${{ github.run_number }}
+        path: |
+          *.log
+        retention-days: 7
+
   run-tasks:
     runs-on: ubuntu-latest
     timeout-minutes: 10
