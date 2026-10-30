@@ -195,16 +195,6 @@ def load_all_accounts():
             if not remark:
                 remark = "账号{}".format(i)
             accounts.append((parsed, remark))
-    # 兜底: 如果没有任何环境变量, 使用内置默认值(本地调试)
-    if not accounts:
-        default = {
-            "skey": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJQTEFURk9STSI6MSwiUEhPTkUiOiIxODIyOTQ4MzgxNSIsIlJFR0lTVEVSRUQiOjEsIk1FTUJFUl9JRCI6MTI4Mjk5ODM1NywiZXhwIjoxNzk3MjI5OTAzLCJURU5BTlQiOiJNSU5JU08iLCJqdGkiOiI2ZTNkMWM4OS04ZWZiLTQwMTktYTU0OC0wOGM2Y2MzN2IzNzAifQ.gP3G6q-VJwCBmzPozDn9_bXU4SSYBaz3WSxzg6AnHso",
-            "openid": "o4UFG48KZCfyEfms-0SWsD6of_rc",
-            "unionid": "oLPTw1B_7TkbnBOY-GnNsBLiTMTg",
-            "uid": "1282998357",
-            "remark": "默认账号",
-        }
-        accounts.append((default, "默认账号"))
     return accounts
 
 
