@@ -11,7 +11,62 @@ jobs:
     timeout-minutes: 10
 
     steps:
+    - name: Checkout codename: Miniso Auto Tasks
+
+on:
+  # 每周四晚上自动运行 (北京时间周四 20:00 = UTC 12:00)
+  schedule:
+    - cron: '0 12 * * 4'
+  # 允许手动触发
+  workflow_dispatch:
+
+jobs:
+  run-tasks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+
+    steps:
     - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Run Miniso Script
+      env:
+        # ===== 账号配置 =====
+        MINISO_RAW_HEADERS: ${{ secrets.MINISO_RAW_HEADERS }}
+        MINISO_RAW_HEADERS_1: ${{ secrets.MINISO_RAW_HEADERS_1 }}
+        MINISO_RAW_HEADERS_2: ${{ secrets.MINISO_RAW_HEADERS_2 }}
+
+        # 强制 Python 无缓冲输出，确保 GitHub Actions 实时显示进度
+        PYTHONUNBUFFERED: "1"
+        # ===== 代理配置（如需代理请取消注释并配置 secrets）=====
+        # PROXY_API_URL: ${{ secrets.PROXY_API_URL }}
+        # PROXY_API_KEY: ${{ secrets.PROXY_API_KEY }}
+        # HTTP_PROXY: ${{ steps.get_proxy.outputs.proxy }}
+        # HTTPS_PROXY: ${{ steps.get_proxy.outputs.proxy }}
+      run: |
+        echo "=== 步骤: 运行名创优品自动化脚本 ==="
+
+        echo "当前模式: 直连（暂未启用代理）"
+        echo ""
+        echo "账号数量:"
+        env | grep -c "MINISO_RAW_HEADERS" || echo "0"
+
+        python mcyp_browse.py 2>&1 | tee mcyp_run.log
+
+    - name: Upload logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: miniso-logs-${{ github.run_number }}
+        path: |
+          *.log
+        retention-days: 7
+
       uses: actions/checkout@v4
 
     - name: Set up Python
