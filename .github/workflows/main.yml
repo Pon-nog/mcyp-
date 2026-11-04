@@ -1,8 +1,13 @@
 name: Miniso Auto Tasks
 
 on:
+  # 定时触发
   schedule:
+    # 每天上午11点 (北京时间11:00 = UTC 03:00)
+    - cron: '0 3 * * *'
+    # 每周四晚上 (北京时间周四 20:00 = UTC 12:00)
     - cron: '0 12 * * 4'
+  # 允许手动触发
   workflow_dispatch:
 
 jobs:
@@ -25,6 +30,9 @@ jobs:
         MINISO_RAW_HEADERS_1: ${{ secrets.MINISO_RAW_HEADERS_1 }}
         MINISO_RAW_HEADERS_2: ${{ secrets.MINISO_RAW_HEADERS_2 }}
         PYTHONUNBUFFERED: "1"
+        # ===== WxPusher 推送配置 =====
+        WXPUSHER_APP_TOKEN: ${{ secrets.WXPUSHER_APP_TOKEN }}
+        WXPUSHER_UID: ${{ secrets.WXPUSHER_UID }}
       run: |
         echo "=== 步骤: 运行名创优品自动化脚本 ==="
         echo "当前模式: 直连（暂未启用代理）"
